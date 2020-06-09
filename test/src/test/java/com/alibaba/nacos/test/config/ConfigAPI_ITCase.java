@@ -15,10 +15,10 @@
  */
 package com.alibaba.nacos.test.config;
 
-import com.alibaba.fastjson.JSON;
 import com.alibaba.nacos.Nacos;
 import com.alibaba.nacos.api.NacosFactory;
 import com.alibaba.nacos.api.PropertyKeyConst;
+import com.alibaba.nacos.api.common.Constants;
 import com.alibaba.nacos.api.config.ConfigService;
 import com.alibaba.nacos.api.config.listener.AbstractListener;
 import com.alibaba.nacos.api.config.listener.Listener;
@@ -27,14 +27,14 @@ import com.alibaba.nacos.client.config.http.HttpAgent;
 import com.alibaba.nacos.client.config.http.MetricsHttpAgent;
 import com.alibaba.nacos.client.config.http.ServerHttpAgent;
 import com.alibaba.nacos.client.config.impl.HttpSimpleClient.HttpResult;
+import com.alibaba.nacos.common.utils.JacksonUtils;
+import com.alibaba.nacos.common.utils.ThreadUtils;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.web.server.LocalServerPort;
 import org.springframework.test.context.junit4.SpringRunner;
 
@@ -50,11 +50,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @author xiaochun.xxc
  */
 @RunWith(SpringRunner.class)
-@SpringBootTest(classes = Nacos.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = Nacos.class, properties = {"server.servlet.context-path=/nacos"},
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class ConfigAPI_ITCase {
-    public static final long TIME_OUT = 2000;
-    public ConfigService iconfig = null;
-    HttpAgent agent = null;
+
+    public static final long TIME_OUT = 5000;
+    static ConfigService iconfig = null;
+    static HttpAgent agent = null;
 
     static final String CONFIG_CONTROLLER_PATH = "/v1/cs/configs";
     String SPECIAL_CHARACTERS = "!@#$%^&*()_+-=_|/'?.";
@@ -63,9 +65,6 @@ public class ConfigAPI_ITCase {
 
     @LocalServerPort
     private int port;
-
-    @Autowired
-    private TestRestTemplate restTemplate;
 
     @Before
     public void setUp() throws Exception {
@@ -85,8 +84,9 @@ public class ConfigAPI_ITCase {
             List<String> params = Arrays.asList("dataId", dataId, "group", group, "beta", "true");
             result = agent.httpDelete(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
-            Assert.assertEquals(true, JSON.parseObject(result.content).getBoolean("data"));
+            Assert.assertTrue(JacksonUtils.toObj(result.content).get("data").booleanValue());
         } catch (Exception e) {
+            e.printStackTrace();
             Assert.fail();
         }
     }
@@ -143,11 +143,11 @@ public class ConfigAPI_ITCase {
      */
     @Test(timeout = 5*TIME_OUT)
     public void nacos_getconfig_4() throws Exception {
+        final String dataId = "nacos_getconfig_4";
         final String content = "test";
-
         boolean result = iconfig.publishConfig(dataId, null, content);
-        Thread.sleep(TIME_OUT);
         Assert.assertTrue(result);
+        Thread.sleep(TIME_OUT);
 
         String value = iconfig.getConfig(dataId, null, TIME_OUT);
         Assert.assertEquals(content, value);
@@ -228,6 +228,7 @@ public class ConfigAPI_ITCase {
      */
     @Test(timeout = 5*TIME_OUT)
     public void nacos_publishConfig_5() throws Exception {
+        final String dataId = "nacos_publishConfig_5";
         String content = "test";
         boolean result = iconfig.publishConfig(dataId, null, content);
         Thread.sleep(TIME_OUT);
@@ -273,16 +274,17 @@ public class ConfigAPI_ITCase {
      * @TCDescription : nacos_服务端有该配置项时，正常删除配置
      * @throws Exception
      */
-    @Test(timeout = 5*TIME_OUT)
+    @Test
     public void nacos_removeConfig_1() throws Exception {
         String content = "test";
         boolean result = iconfig.publishConfig(dataId, group, content);
-        Thread.sleep(TIME_OUT);
+
         Assert.assertTrue(result);
+        Thread.sleep(TIME_OUT);
 
         result = iconfig.removeConfig(dataId, group);
-        Thread.sleep(TIME_OUT);
         Assert.assertTrue(result);
+        Thread.sleep(TIME_OUT);
         String value = iconfig.getConfig(dataId, group, TIME_OUT);
         Assert.assertNull(value);
     }
@@ -363,14 +365,9 @@ public class ConfigAPI_ITCase {
      * @author xiaochun.xxc
      * @since 3.6.8
      */
-    @Test(timeout = TIME_OUT)
-    public void nacos_addListener_2() {
-        try {
-            iconfig.addListener(dataId, group, null);
-            Assert.fail();
-        } catch (Exception e) {
-            Assert.assertFalse(false);
-        }
+    @Test(timeout = TIME_OUT, expected = IllegalArgumentException.class)
+    public void nacos_addListener_2() throws Exception {
+        iconfig.addListener(dataId, group, null);
     }
 
 
@@ -381,10 +378,13 @@ public class ConfigAPI_ITCase {
      * @author xiaochun.xxc
      * @since 3.6.8
      */
-    @Test(timeout = 5*TIME_OUT)
+    @Test(timeout = 5 * TIME_OUT)
     public void nacos_addListener_3() throws InterruptedException, NacosException {
         final AtomicInteger count = new AtomicInteger(0);
+        final String dataId = "nacos_addListener_3";
+        final String group = "nacos_addListener_3";
         final String content = "test-abc";
+        final String newContent = "nacos_addListener_3";
         boolean result = iconfig.publishConfig(dataId, group, content);
         Thread.sleep(TIME_OUT);
         Assert.assertTrue(result);
@@ -393,13 +393,18 @@ public class ConfigAPI_ITCase {
             @Override
             public void receiveConfigInfo(String configInfo) {
                 count.incrementAndGet();
-                Assert.assertEquals(content, configInfo);
+                Assert.assertEquals(newContent, configInfo);
             }
         };
         iconfig.addListener(dataId, group, ml);
+        result = iconfig.publishConfig(dataId, group, newContent);
+        Assert.assertTrue(result);
         while (count.get() == 0) {
             Thread.sleep(2000);
         }
+        // Get enough sleep to ensure that the monitor is triggered only once
+        // during the two long training sessions
+        ThreadUtils.sleep(Constants.CONFIG_LONG_POLL_TIMEOUT << 1);
         Assert.assertEquals(1, count.get());
         iconfig.removeListener(dataId, group, ml);
     }
@@ -441,12 +446,14 @@ public class ConfigAPI_ITCase {
      * @TCDescription : nacos_在主动拉取配置后并注册Listener，在更新配置后才触发Listener监听事件(使用特定接口)
      * @TestStep : TODO Test steps
      * @ExpectResult : TODO expect results
-     * @author xiaochun.xxc
+     * @author chuntaojun
      * @since 3.6.8
      */
     @Test
     public void nacos_addListener_5() throws InterruptedException, NacosException {
         final AtomicInteger count = new AtomicInteger(0);
+        final String dataId = "nacos_addListener_5";
+        final String group = "nacos_addListener_5";
         final String content = "test-abc";
         final String newContent = "new-test-def";
         boolean result = iconfig.publishConfig(dataId, group, content);
@@ -458,8 +465,7 @@ public class ConfigAPI_ITCase {
             @Override
             public void receiveConfigInfo(String configInfo) {
                 count.incrementAndGet();
-                System.out.println("Listener receive : [" + configInfo + "]");
-                Assert.assertEquals(content, newContent);
+                Assert.assertEquals(newContent, configInfo);
             }
         };
 
@@ -480,7 +486,7 @@ public class ConfigAPI_ITCase {
      * @TCDescription : nacos_在主动拉取配置后并注册Listener，在更新配置后才触发Listener监听事件(进行配置参数设置)
      * @TestStep : TODO Test steps
      * @ExpectResult : TODO expect results
-     * @author xiaochun.xxc
+     * @author chuntaojun
      * @since 3.6.8
      */
     @Test
@@ -492,6 +498,8 @@ public class ConfigAPI_ITCase {
         ConfigService iconfig = NacosFactory.createConfigService(properties);
 
         final AtomicInteger count = new AtomicInteger(0);
+        final String dataId = "nacos_addListener_6";
+        final String group ="nacos_addListener_6";
         final String content = "test-abc";
         final String newContent = "new-test-def";
         boolean result = iconfig.publishConfig(dataId, group, content);
@@ -504,7 +512,7 @@ public class ConfigAPI_ITCase {
             public void receiveConfigInfo(String configInfo) {
                 count.incrementAndGet();
                 System.out.println("Listener receive : [" + configInfo + "]");
-                Assert.assertEquals(content, newContent);
+                Assert.assertEquals(newContent, configInfo);
             }
         };
 
@@ -629,7 +637,6 @@ public class ConfigAPI_ITCase {
     @Test(timeout = TIME_OUT)
     public void nacos_removeListener_4() {
         iconfig.removeListener(dataId, group, null);
-        Assert.assertTrue(true);
     }
 
     /**
@@ -653,7 +660,7 @@ public class ConfigAPI_ITCase {
             result = agent.httpGet(CONFIG_CONTROLLER_PATH, null, params, agent.getEncode(), TIME_OUT);
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
 
-            Assert.assertEquals(content, JSON.parseObject(result.content).getString("content"));
+            Assert.assertEquals(content, JacksonUtils.toObj(result.content).get("content").textValue());
         } catch (Exception e) {
             Assert.fail();
         }
@@ -681,7 +688,7 @@ public class ConfigAPI_ITCase {
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
 
             System.out.println(result.content);
-            Assert.assertNotNull(JSON.parseObject(result.content).getString("data"));
+            Assert.assertFalse(JacksonUtils.toObj(result.content).get("data").isNull());
 
         } catch (Exception e) {
             Assert.fail();
@@ -710,7 +717,7 @@ public class ConfigAPI_ITCase {
             List<String> params = Arrays.asList("dataId", dataId, "group", group, "beta", "true");
             result = agent.httpGet(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
-            Assert.assertEquals(content, JSON.parseObject(result.content).getJSONObject("data").getString("content"));
+            Assert.assertEquals(content, JacksonUtils.toObj(result.content).get("data").get("content").textValue());
             // delete data
             result = agent.httpDelete(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
@@ -744,8 +751,9 @@ public class ConfigAPI_ITCase {
             result = agent.httpDelete(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
 
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
-            Assert.assertEquals(true, JSON.parseObject(result.content).getBoolean("data"));
+            Assert.assertTrue(JacksonUtils.toObj(result.content).get("data").booleanValue());
         } catch (Exception e) {
+            e.printStackTrace();
             Assert.fail();
         }
     }
@@ -758,7 +766,7 @@ public class ConfigAPI_ITCase {
      * @author xiaochun.xxc
      * @since 3.6.8
      */
-    @Test(timeout = 3*TIME_OUT)
+    @Test(timeout = 5*TIME_OUT)
     public void nacos_openAPI_fuzzySearchConfig() {
         HttpResult result = null;
 
@@ -772,8 +780,8 @@ public class ConfigAPI_ITCase {
             result = agent.httpGet(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
 
-            Assert.assertTrue(JSON.parseObject(result.content).getIntValue("totalCount") >= 1);
-            Assert.assertTrue(JSON.parseObject(result.content).getJSONArray("pageItems").getJSONObject(0).getString("content").startsWith(content));
+            Assert.assertTrue(JacksonUtils.toObj(result.content).get("totalCount").intValue() >= 1);
+            Assert.assertTrue(JacksonUtils.toObj(result.content).get("pageItems").get(0).get("content").textValue().startsWith(content));
         } catch (Exception e) {
             Assert.fail();
         }
@@ -787,7 +795,7 @@ public class ConfigAPI_ITCase {
      * @author xiaochun.xxc
      * @since 3.6.8
      */
-    @Test(timeout = 3*TIME_OUT)
+    @Test(timeout = 5*TIME_OUT)
     public void nacos_openAPI_fuzzySearchConfig_1() {
         HttpResult result = null;
 
@@ -801,8 +809,8 @@ public class ConfigAPI_ITCase {
             result = agent.httpGet(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
 
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
-            Assert.assertTrue(JSON.parseObject(result.content).getIntValue("totalCount") >= 1);
-            Assert.assertEquals(content, JSON.parseObject(result.content).getJSONArray("pageItems").getJSONObject(0).getString("content"));
+            Assert.assertTrue(JacksonUtils.toObj(result.content).get("totalCount").intValue() >= 1);
+            Assert.assertEquals(content, JacksonUtils.toObj(result.content).get("pageItems").get(0).get("content").textValue());
 
         } catch (Exception e) {
             Assert.fail();
@@ -817,22 +825,22 @@ public class ConfigAPI_ITCase {
      * @author xiaochun.xxc
      * @since 3.6.8
      */
-    @Test(timeout = 3*TIME_OUT)
+    @Test(timeout = 5*TIME_OUT)
     public void nacos_openAPI_searchConfig() {
         HttpResult result = null;
 
         try {
             final String content = "test123";
             boolean ret = iconfig.publishConfig(dataId, group, content);
-            Thread.sleep(TIME_OUT);
             Assert.assertTrue(ret);
+            Thread.sleep(TIME_OUT);
 
             List<String> params = Arrays.asList("dataId", dataId, "group", group, "pageNo","1", "pageSize","10", "search", "accurate");
             result = agent.httpGet(CONFIG_CONTROLLER_PATH + "/", null, params, agent.getEncode(), TIME_OUT);
 
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
-            Assert.assertEquals(1, JSON.parseObject(result.content).getIntValue("totalCount"));
-            Assert.assertEquals(content, JSON.parseObject(result.content).getJSONArray("pageItems").getJSONObject(0).getString("content"));
+            Assert.assertEquals(1, JacksonUtils.toObj(result.content).get("totalCount").intValue());
+            Assert.assertEquals(content, JacksonUtils.toObj(result.content).get("pageItems").get(0).get("content").textValue());
 
         } catch (Exception e) {
             Assert.fail();
@@ -847,21 +855,21 @@ public class ConfigAPI_ITCase {
      * @author xiaochun.xxc
      * @since 3.6.8
      */
-    @Test(timeout = 3*TIME_OUT)
+    @Test(timeout = 5*TIME_OUT)
     public void nacos_openAPI_searchConfig_2() {
         HttpResult result = null;
 
         try {
             final String content = "test测试";
             boolean ret = iconfig.publishConfig(dataId, group, content);
-            Thread.sleep(TIME_OUT);
             Assert.assertTrue(ret);
+            Thread.sleep(TIME_OUT);
 
             List<String> params = Arrays.asList("dataId", dataId, "group", group, "pageNo","1", "pageSize","10", "search", "accurate");
             result = agent.httpGet(CONFIG_CONTROLLER_PATH + "/", null, params, "utf-8", TIME_OUT);
             Assert.assertEquals(HttpURLConnection.HTTP_OK, result.code);
-            Assert.assertEquals(1, JSON.parseObject(result.content).getIntValue("totalCount"));
-            Assert.assertEquals(content, JSON.parseObject(result.content).getJSONArray("pageItems").getJSONObject(0).getString("content"));
+            Assert.assertEquals(1, JacksonUtils.toObj(result.content).get("totalCount").intValue());
+            Assert.assertEquals(content, JacksonUtils.toObj(result.content).get("pageItems").get(0).get("content").textValue());
         } catch (Exception e) {
             Assert.fail();
         }

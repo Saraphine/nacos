@@ -15,10 +15,10 @@
  */
 package com.alibaba.nacos.config.server.aspect;
 
-import com.alibaba.nacos.common.utils.Md5Utils;
+import com.alibaba.nacos.common.utils.MD5Utils;
 import com.alibaba.nacos.config.server.constant.Constants;
 import com.alibaba.nacos.config.server.monitor.MetricsMonitor;
-import com.alibaba.nacos.config.server.service.ConfigService;
+import com.alibaba.nacos.config.server.service.ConfigCacheService;
 import com.alibaba.nacos.config.server.utils.GroupKey2;
 import com.alibaba.nacos.config.server.utils.LogUtil;
 import com.alibaba.nacos.config.server.utils.RequestUtil;
@@ -67,7 +67,7 @@ public class RequestLogAspect {
     public Object interfacePublishSingle(ProceedingJoinPoint pjp, HttpServletRequest request,
                                          HttpServletResponse response, String dataId, String group, String tenant,
                                          String content) throws Throwable {
-        final String md5 = content == null ? null : Md5Utils.getMD5(content, Constants.ENCODE);
+        final String md5 = content == null ? null : MD5Utils.md5Hex(content, Constants.ENCODE);
         MetricsMonitor.getPublishMonitor().incrementAndGet();
         return logClientRequest("publish", pjp, request, response, dataId, group, tenant, md5);
     }
@@ -88,7 +88,7 @@ public class RequestLogAspect {
     public Object interfaceGetConfig(ProceedingJoinPoint pjp, HttpServletRequest request, HttpServletResponse response,
                                      String dataId, String group, String tenant) throws Throwable {
         final String groupKey = GroupKey2.getKey(dataId, group, tenant);
-        final String md5 = ConfigService.getContentMd5(groupKey);
+        final String md5 = ConfigCacheService.getContentMd5(groupKey);
         MetricsMonitor.getConfigMonitor().incrementAndGet();
         return logClientRequest("get", pjp, request, response, dataId, group, tenant, md5);
     }
